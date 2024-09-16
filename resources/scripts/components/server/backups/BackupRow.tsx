@@ -1,0 +1,111 @@
+import { faFile, faLock } from '@fortawesome/free-solid-svg-icons';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { format, formatDistanceToNow } from 'date-fns';
+
+import Can from '@/components/elements/Can';
+import { ContextMenu, ContextMenuTrigger } from '@/components/elements/ContextMenu';
+import Spinner from '@/components/elements/Spinner';
+import { SocketEvent } from '@/components/server/events';
+
+import { bytesToString } from '@/lib/formatters';
+
+import { ServerBackup } from '@/api/server/types';
+import getServerBackups from '@/api/swr/getServerBackups';
+
+import useWebsocketEvent from '@/plugins/useWebsocketEvent';
+
+import BackupContextMenu from './BackupContextMenu';
+
+interface Props {
+    backup: ServerBackup;
+}
+
+export default ({ backup }: Props) => {
+    const { mutate } = getServerBackups();
+
+    useWebsocketEvent(`${SocketEvent.BACKUP_COMPLETED}:${backup.uuid}` as SocketEvent, async (data) => {
+        try {
+            const parsed = JSON.parse(data);
+
+            await mutate(
+                (data) => ({
+                    ...data!,
+                    items: data!.items.map((b) =>
+                        b.uuid !== backup.uuid
+                            ? b
+                            : {
+                                  ...b,
+                                  isSuccessful: parsed.is_successful || true,
+                                  checksum: (parsed.checksum_type || '') + ':' + (parsed.checksum || ''),
+                                  bytes: parsed.file_size || 0,
+                                  completedAt: new Date(),
+                              },
+                    ),
+                }),
+                false,
+            );
+        } catch (e) {
+            console.warn(e);
+        }
+    });
+
+    return (
+        <ContextMenu>
+            <ContextMenuTrigger className='flex flex-1 items-center rounded-md bg-[#ffffff11] px-6 py-4 transition duration-100 hover:bg-[#ffffff19] hover:duration-0 gap-4 flex-col sm:flex-row'>
+                <div className={`flex-auto max-w-full box-border`}>
+                    <div className='flex flex-row align-middle items-center gap-6 truncate'>
+                        <div className='flex-none'>
+                            {backup.completedAt === null ? (
+                                <Spinner size={'small'} />
+                            ) : backup.isLocked ? (
+                                <FontAwesomeIcon icon={faLock} className='text-red-500' />
+                            ) : (
+                                <FontAwesomeIcon icon={faFile} />
+                            )}
+                        </div>
+                        <div className={`flex items-center w-full md:flex-1`}>
+                            <div className={`flex flex-col`}>
+                                <div className={`flex items-center text-sm mb-1`}>
+                                    {backup.completedAt !== null && !backup.isSuccessful && (
+                                        <span
+                                            className={`bg-red-500 py-px px-2 rounded-full text-white text-xs uppercase border border-red-600 mr-2`}
+                                        >
+                                            Fallido
+                                        </span>
+                                    )}
+                                    <div className={`flex gap-2 items-center justify-center`}>
+                                        <p className='break-words truncate text-lg'>{backup.name}</p>
+                                    </div>
+                                </div>
+                                {backup.checksum && (
+                                    <p className={`mt-1 md:mt-0 text-xs text-zinc-400 font-mono truncate`}>
+                                        {backup.checksum}
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div className='flex flex-row justify-center font-medium sm:justify-between min-w-full lg:w-96 sm:min-w-40'>
+                    {backup.completedAt !== null && backup.isSuccessful && (
+                        <>
+                            <span className={`text-xs sm:flex-initial sm:ml-0`}>{bytesToString(backup.bytes)}</span>
+                            <p className={`text-xs inline sm:hidden`}>,&nbsp;</p>
+                        </>
+                    )}
+                    <p
+                        title={format(backup.createdAt, 'ddd, MMMM do, yyyy HH:mm:ss')}
+                        className={`text-xs sm:flex-initial`}
+                    >
+                        {formatDistanceToNow(backup.createdAt, { includeSeconds: true, addSuffix: true })}
+                    </p>
+                </div>
+
+                <Can action={['backup.download', 'backup.restore', 'backup.delete']} matchAny>
+                    {!backup.completedAt ? <></> : <BackupContextMenu backup={backup} />}
+                </Can>
+            </ContextMenuTrigger>
+        </ContextMenu>
+    );
+};
